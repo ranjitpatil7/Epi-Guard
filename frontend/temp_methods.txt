@@ -1,0 +1,16 @@
+﻿  getUsers: async () => {
+    const response = await apiClient.get('/users');
+    return response.data;
+  },
+  createUser: async (data: any) => {
+    const response = await apiClient.post('/users', data);
+    return response.data;
+  },
+  updateUserStatus: async (userId: number, status: string) => {
+    const response = await apiClient.patch(\/users/\/status?status=\\);
+    return response.data;
+  },
+  changePassword: async (data: any) => {
+    const response = await apiClient.patch('/users/me/password', data);
+    return response.data;
+  }

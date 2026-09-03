@@ -1,0 +1,160 @@
+@import "tailwindcss";
+
+@theme {
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-heading: 'Inter', system-ui, sans-serif;
+}
+
+@layer base {
+  :root, .dark {
+    /* Premium Dark Mode - Midnight Slate (Deep Navy/Gray instead of pure black) */
+    --background: #0b1121; /* Very deep slate/blue */
+    --foreground: #f8fafc;
+    
+    --card: rgba(30, 41, 59, 0.4); /* Translucent slate-800 */
+    --card-foreground: #f8fafc;
+    
+    --popover: rgba(15, 23, 42, 0.95);
+    --popover-foreground: #f8fafc;
+    
+    --primary: #3b82f6; /* Vibrant Blue */
+    --primary-foreground: #ffffff;
+    
+    --secondary: rgba(255, 255, 255, 0.05);
+    --secondary-foreground: #f8fafc;
+    
+    --muted: rgba(255, 255, 255, 0.05);
+    --muted-foreground: #94a3b8;
+    
+    --accent: rgba(59, 130, 246, 0.1);
+    --accent-foreground: #60a5fa;
+    
+    --destructive: #ef4444;
+    --destructive-foreground: #f8fafc;
+
+    --border: rgba(255, 255, 255, 0.08); /* Ultra-thin, soft white border */
+    --input: rgba(255, 255, 255, 0.04);
+    --ring: rgba(59, 130, 246, 0.5);
+
+    --radius: 1rem;
+  }
+
+  /* Field Mode (Light High-Contrast Mode for bright environments) */
+  .field-mode {
+    --background: #f8fafc;
+    --foreground: #020617;
+    
+    --card: #ffffff;
+    --card-foreground: #0f172a;
+    
+    --popover: #ffffff;
+    --popover-foreground: #0f172a;
+    
+    --primary: #2563eb;
+    --primary-foreground: #ffffff;
+    
+    --secondary: #e2e8f0;
+    --secondary-foreground: #0f172a;
+    
+    --muted: #f1f5f9;
+    --muted-foreground: #64748b;
+    
+    --accent: #dbeafe;
+    --accent-foreground: #1d4ed8;
+    
+    --destructive: #dc2626;
+    --destructive-foreground: #ffffff;
+
+    --border: #cbd5e1; /* Solid visible border */
+    --input: #e2e8f0;
+    --ring: rgba(37, 99, 235, 0.5);
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    /* Soft glowing mesh background for dark mode */
+    background-image: 
+      radial-gradient(circle at 15% 50%, rgba(59, 130, 246, 0.08), transparent 40%),
+      radial-gradient(circle at 85% 30%, rgba(139, 92, 246, 0.08), transparent 45%);
+    background-attachment: fixed;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+  .field-mode body {
+    background-image: none; /* Remove glow for field mode */
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+    letter-spacing: -0.025em;
+    font-weight: 500;
+  }
+}
+
+/* Glassmorphism utilities - Dynamic Style */
+.glass-panel {
+  background-color: var(--card);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--border);
+  box-shadow: 
+    0 4px 24px -4px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.field-mode .glass-panel {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+}
+
+.glass-panel:hover {
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow: 
+    0 12px 32px -8px rgba(0, 0, 0, 0.4),
+    0 0 16px rgba(59, 130, 246, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+/* Clean text utility */
+.text-gradient {
+  background: linear-gradient(135deg, #60a5fa, #c084fc);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}

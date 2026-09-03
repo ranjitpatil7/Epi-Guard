@@ -1,0 +1,850 @@
+import { render, screen, waitFor, act } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { AuthProvider, useAuth } from '@/lib/auth/AuthContext'
+import axios from 'axios'
+import userEvent from '@testing-library/user-event'
+
+// Mock axios
+vi.mock('axios', () => {
+  const mockInstance = {
+    get: vi.fn(),
+    post: vi.fn(),
+    interceptors: {
+      request: { use: vi.fn(), eject: vi.fn() },
+      response: { use: vi.fn(), eject: vi.fn() }
+    }
+  }
+  return {
+    default: {
+      ...mockInstance,
+      create: vi.fn(() => mockInstance)
+    }
+  }
+})
+
+// Test Component that consumes AuthContext
+function TestComponent() {
+  const { user, isAuthenticated, isLoading, login, logout } = useAuth()
+  
+  if (isLoading) return <div>Loading Auth...</div>
+  
+  return (
+    <div>
+      <div data-testid="auth-status">{isAuthenticated ? 'Authenticated' : 'Unauthenticated'}</div>
+      <div data-testid="user-role">{user ? user.role : 'None'}</div>
+      <button onClick={() => login('mock_access', 'mock_refresh', 'mock_session')}>Login</button>
+      <button onClick={() => logout()}>Logout</button>
+    </div>
+  )
+}
+
+describe('AuthContext Integration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
+
+  it('renders unauthenticated state initially when no token exists', async () => {
+    render(<AuthProvider><TestComponent /></AuthProvider>)
+    expect(screen.getByTestId('auth-status')).toHaveTextContent('Unauthenticated')
+  })
+
+  it('fetches user and sets authenticated state if token exists in localStorage', async () => {
+    localStorage.setItem('access_token', 'fake_token')
+    
+    // Mock the /me response exactly matching backend
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      data: {
+        id: 1,
+        username: 'admin_test',
+        role: 'Administrator',
+        region_id: null,
+        permissions: ['MANAGE_USERS', 'VIEW_RISK']
+      }
+    })
+
+    render(<AuthProvider><TestComponent /></AuthProvider>)
+    
+    expect(screen.getByText('Loading Auth...')).toBeInTheDocument()
+    
+    await waitFor(() => {
+      expect(screen.getByTestId('auth-status')).toHaveTextContent('Authenticated')
+      expect(screen.getByTestId('user-role')).toHaveTextContent('Administrator')
+    })
+  })
+
+  it('handles login function and fetches user', async () => {
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      data: { id: 2, role: 'Field Officer', permissions: [] }
+    })
+
+    render(<AuthProvider><TestComponent /></AuthProvider>)
+    
+    const loginButton = screen.getByText('Login')
+    await userEvent.click(loginButton)
+
+    expect(localStorage.getItem('access_token')).toBe('mock_access')
+    
+    await waitFor(() => {
+      expect(screen.getByTestId('auth-status')).toHaveTextContent('Authenticated')
+      expect(screen.getByTestId('user-role')).toHaveTextContent('Field Officer')
+    })
+  })
+
+  it('handles logout function and clears state', async () => {
+    // Setup initial auth state
+    localStorage.setItem('access_token', 'fake')
+    localStorage.setItem('session_id', 'sess1')
+    
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      data: { id: 1, role: 'Admin', permissions: [] }
+    })
+    
+    vi.mocked(axios.post).mockResolvedValueOnce({})
+
+    render(<AuthProvider><TestComponent /></AuthProvider>)
+    
+    await waitFor(() => {
+      expect(screen.getByTestId('auth-status')).toHaveTextContent('Authenticated')
+    })
+
+    const logoutButton = screen.getByText('Logout')
+    await userEvent.click(logoutButton)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('auth-status')).toHaveTextContent('Unauthenticated')
+      expect(localStorage.getItem('access_token')).toBeNull()
+    })
+    
+    // Should call logout endpoint
+    expect(axios.post).toHaveBeenCalledWith('/api/v1/auth/logout?session_id=sess1')
+  })
+})
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import Copilot from '@/pages/copilot/Copilot'
+import { client } from '@/lib/api/client'
+
+vi.mock('@/lib/api/client', () => ({
+  client: {
+    post: vi.fn(),
+  },
+}))
+
+describe('Copilot UI Integration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    
+    // Create a mock DOM element that scrolling logic looks for
+    window.HTMLElement.prototype.scrollIntoView = vi.fn()
+  })
+
+  it('renders initial welcome state and accepts user input', async () => {
+    render(<Copilot />)
+    
+    expect(screen.getByText(/JalRakshak AI Copilot/i)).toBeInTheDocument()
+    
+    const input = screen.getByPlaceholderText(/Ask Copilot/i)
+    expect(input).toBeInTheDocument()
+  })
+
+  it('submits a question, shows loading state, and renders the AI response', async () => {
+    vi.mocked(client.post).mockResolvedValueOnce({
+      data: {
+        text: 'The overall risk is critical due to flooding.',
+        safety_flagged: false,
+        was_interrupted: false,
+        requires_authorization: false
+      }
+    })
+
+    render(<Copilot />)
+    
+    const input = screen.getByPlaceholderText(/Ask Copilot/i)
+    await userEvent.type(input, 'What is the risk?{enter}')
+    
+    // Input is cleared
+    expect(input).toHaveValue('')
+
+    // Should call API
+    expect(client.post).toHaveBeenCalledWith('/copilot/ask', {
+      message: 'What is the risk?',
+      conversation_id: null
+    })
+
+    // Wait for the response to render
+    await waitFor(() => {
+      expect(screen.getByText('The overall risk is critical due to flooding.')).toBeInTheDocument()
+    })
+  })
+
+  it('safely renders an authorization-denied response', async () => {
+    vi.mocked(client.post).mockResolvedValueOnce({
+      data: {
+        text: 'I attempted to execute a tool, but you do not have the required permissions.',
+        safety_flagged: false,
+        was_interrupted: true,
+        requires_authorization: true
+      }
+    })
+
+    render(<Copilot />)
+    const input = screen.getByPlaceholderText(/Ask/i)
+    await userEvent.type(input, 'Do something secret{enter}')
+    
+    await waitFor(() => {
+      expect(screen.getByText(/you do not have the required permissions/i)).toBeInTheDocument()
+    })
+  })
+})
+import { render, screen, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import Dashboard from '@/pages/dashboard/Dashboard'
+import { client } from '@/lib/api/client'
+import { MemoryRouter } from 'react-router-dom'
+import * as useRealtimeModule from '@/hooks/useRealtime'
+
+vi.mock('@/lib/api/client', () => ({
+  client: { get: vi.fn() },
+}))
+
+vi.mock('@/hooks/useRealtime', () => ({
+  useRealtime: vi.fn(),
+}))
+
+// Mock Recharts
+vi.mock('recharts', () => ({
+  ResponsiveContainer: ({ children }: any) => <div data-testid="recharts-container">{children}</div>,
+  BarChart: ({ children }: any) => <div data-testid="bar-chart">{children}</div>,
+  Bar: () => <div />,
+  XAxis: () => <div />,
+  YAxis: () => <div />,
+  CartesianGrid: () => <div />,
+  Tooltip: () => <div />,
+}))
+
+describe('Dashboard Component', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(useRealtimeModule.useRealtime).mockReturnValue({
+      status: 'CONNECTED',
+      timeline: [],
+      lastEvent: null,
+      criticalEventCount: 0,
+      reconnectAttempts: 0
+    } as any)
+
+    vi.mocked(client.get).mockImplementation(async (url) => {
+      if (url === '/risk/current') {
+        return {
+          data: [
+            { region_id: 1, overall_risk_score: 85, risk_level: 'CRITICAL', confidence: 0.9 },
+          ]
+        }
+      }
+      if (url === '/alerts/active') return { data: [] }
+      if (url === '/alerts/incidents') return { data: [] }
+      if (url === '/regions/') return { data: [{ id: 1, name: 'Region 1' }] }
+      return { data: [] }
+    })
+  })
+
+  it('renders loading state initially, then data', async () => {
+    render(<MemoryRouter><Dashboard /></MemoryRouter>)
+    
+    // Check loading indicator or skeleton if any (dashboard might just load directly, but let's check for the title)
+    expect(screen.getByText('National Overview')).toBeInTheDocument()
+
+    // Wait for data to render
+    await waitFor(() => {
+      expect(screen.getByText('Critical')).toBeInTheDocument()
+      expect(screen.getByTestId('bar-chart')).toBeInTheDocument()
+    })
+  })
+
+  it('renders realtime events timeline if available', async () => {
+    vi.mocked(useRealtimeModule.useRealtime).mockReturnValue({
+      status: 'CONNECTED',
+      timeline: [
+        { message_id: '1', event_type: 'RISK_ESCALATED', payload: { new_level: 'CRITICAL' }, timestamp: new Date().toISOString() }
+      ],
+      lastEvent: null,
+      criticalEventCount: 1,
+      reconnectAttempts: 0
+    } as any)
+
+    render(<MemoryRouter><Dashboard /></MemoryRouter>)
+    
+    await waitFor(() => {
+      expect(screen.getByText('RISK_ESCALATED')).toBeInTheDocument()
+    })
+  })
+})
+import { render, screen, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import InventoryDashboard from '@/pages/inventory/InventoryDashboard'
+import { client } from '@/lib/api/client'
+
+vi.mock('@/lib/api/client', () => ({
+  client: {
+    get: vi.fn(),
+  },
+}))
+
+vi.mock('@/hooks/useRealtime', () => ({
+  useRealtime: vi.fn(() => ({ lastEvent: null })),
+}))
+
+describe('Global Error & Loading States Integration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('renders loading state initially during API fetch', async () => {
+    // Make the promise unresolved initially to capture loading state
+    let resolveApi: any;
+    const promise = new Promise(resolve => { resolveApi = resolve })
+    
+    vi.mocked(client.get).mockReturnValue(promise as any)
+
+    render(<InventoryDashboard />)
+    
+    // Check loading indicator is visible
+    expect(screen.getByText(/Loading inventory data/i)).toBeInTheDocument()
+    
+    // Resolve promise to clean up
+    resolveApi({ data: { items: [] } })
+  })
+
+  it('renders an API error state correctly when request fails', async () => {
+    vi.mocked(client.get).mockRejectedValueOnce(new Error('Network error: Gateway timeout'))
+
+    render(<InventoryDashboard />)
+    
+    await waitFor(() => {
+      expect(screen.getByText(/Network error: Gateway timeout/i)).toBeInTheDocument()
+    })
+    
+    // Ensure loading state is gone
+    expect(screen.queryByText(/Loading inventory data/i)).not.toBeInTheDocument()
+  })
+
+  it('renders empty state safely when API returns empty arrays', async () => {
+    vi.mocked(client.get).mockResolvedValueOnce({ data: { items: [] } })
+
+    render(<InventoryDashboard />)
+    
+    await waitFor(() => {
+      expect(screen.getByText(/No inventory items available/i)).toBeInTheDocument()
+    })
+  })
+})
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import FleetRouting from '@/pages/logistics/FleetRouting'
+import { client } from '@/lib/api/client'
+
+vi.mock('@/lib/api/client', () => ({
+  client: {
+    get: vi.fn(),
+    post: vi.fn(),
+  },
+}))
+
+describe('Fleet Routing Component', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(client.get).mockResolvedValue({
+      data: [
+        { id: 1, name: 'North District' },
+        { id: 2, name: 'South District' },
+        { id: 3, name: 'East District' },
+      ]
+    })
+    vi.mocked(client.post).mockResolvedValue({
+      data: {
+        route: [1, 2],
+        total_distance: 120.5,
+        estimated_time_hours: 2.5
+      }
+    })
+  })
+
+  it('loads regions dynamically and avoids hardcoded values', async () => {
+    render(<FleetRouting />)
+    
+    expect(client.get).toHaveBeenCalledWith('/regions/')
+    
+    await waitFor(() => {
+      expect(screen.getByLabelText('North District')).toBeInTheDocument()
+      expect(screen.getByLabelText('South District')).toBeInTheDocument()
+    })
+  })
+
+  it('disables calculate button when no regions are selected', async () => {
+    render(<FleetRouting />)
+    
+    await waitFor(() => {
+      expect(screen.getByLabelText('North District')).toBeInTheDocument()
+    })
+
+    const button = screen.getByRole('button', { name: /Calculate Optimal Route/i })
+    expect(button).toBeDisabled()
+  })
+
+  it('allows selection and sends selected region IDs to backend', async () => {
+    render(<FleetRouting />)
+    
+    await waitFor(() => {
+      expect(screen.getByLabelText('North District')).toBeInTheDocument()
+    })
+
+    const cb1 = screen.getByLabelText('North District')
+    const cb2 = screen.getByLabelText('South District')
+    
+    await userEvent.click(cb1)
+    await userEvent.click(cb2)
+    
+    const button = screen.getByRole('button', { name: /Calculate Optimal Route/i })
+    expect(button).not.toBeDisabled()
+    
+    await userEvent.click(button)
+    
+    // Ensure it sends the array of selected IDs
+    expect(client.post).toHaveBeenCalledWith('/logistics/route/calculate', {
+      region_ids: [1, 2]
+    })
+    
+    // Renders the route result
+    await waitFor(() => {
+      expect(screen.getByText(/120.5/)).toBeInTheDocument() // Distance
+      expect(screen.getByText(/2.5/)).toBeInTheDocument() // Time
+    })
+  })
+})
+import { render, screen, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import InventoryDashboard from '@/pages/inventory/InventoryDashboard'
+import { client } from '@/lib/api/client'
+import * as useRealtimeModule from '@/hooks/useRealtime'
+
+vi.mock('@/lib/api/client', () => ({
+  client: {
+    get: vi.fn(),
+  },
+}))
+
+vi.mock('@/hooks/useRealtime', () => ({
+  useRealtime: vi.fn(),
+}))
+
+describe('Inventory Real-Time UI', () => {
+  let mockLastEvent: any = null
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockLastEvent = null
+    
+    vi.mocked(useRealtimeModule.useRealtime).mockImplementation(() => ({
+      status: 'CONNECTED',
+      timeline: [],
+      lastEvent: mockLastEvent,
+      criticalEventCount: 0,
+      reconnectAttempts: 0
+    } as any))
+
+    vi.mocked(client.get).mockResolvedValue({
+      data: {
+        items: [
+          { id: 1, name: 'ORS Packets', current_stock: 5000, minimum_threshold: 1000, unit: 'packets', is_low_stock: false },
+          { id: 2, name: 'Vaccines', current_stock: 500, minimum_threshold: 1000, unit: 'vials', is_low_stock: true }
+        ]
+      }
+    })
+  })
+
+  it('renders initial inventory from API', async () => {
+    render(<InventoryDashboard />)
+    
+    expect(client.get).toHaveBeenCalledWith('/inventory/')
+    
+    await waitFor(() => {
+      expect(screen.getByText('ORS Packets')).toBeInTheDocument()
+      expect(screen.getByText('5000')).toBeInTheDocument()
+      expect(screen.getByText('Vaccines')).toBeInTheDocument()
+      expect(screen.getByText('500')).toBeInTheDocument()
+    })
+  })
+
+  it('updates stock correctly when INVENTORY_UPDATED event arrives via WebSocket', async () => {
+    const { rerender } = render(<InventoryDashboard />)
+    
+    await waitFor(() => {
+      expect(screen.getByText('5000')).toBeInTheDocument()
+    })
+
+    // Simulate WS Event
+    mockLastEvent = {
+      event_type: 'INVENTORY_UPDATED',
+      message_id: 'evt-123',
+      payload: {
+        item_id: 1,
+        item_name: 'ORS Packets',
+        quantity_deducted: 1000,
+        new_stock: 4000,
+        minimum_threshold: 1000,
+        unit: 'packets',
+        is_low_stock: false
+      }
+    }
+
+    // Force re-render with the new mock value
+    rerender(<InventoryDashboard />)
+
+    // The UI should update to 4000
+    await waitFor(() => {
+      expect(screen.getByText('4000')).toBeInTheDocument()
+      expect(screen.queryByText('5000')).not.toBeInTheDocument()
+    })
+  })
+
+  it('ignores duplicate message_ids in INVENTORY_UPDATED events', async () => {
+    const { rerender } = render(<InventoryDashboard />)
+    
+    await waitFor(() => {
+      expect(screen.getByText('5000')).toBeInTheDocument()
+    })
+
+    // Event 1
+    mockLastEvent = {
+      event_type: 'INVENTORY_UPDATED',
+      message_id: 'evt-123',
+      payload: { item_id: 1, new_stock: 4000, is_low_stock: false }
+    }
+    rerender(<InventoryDashboard />)
+    await waitFor(() => expect(screen.getByText('4000')).toBeInTheDocument())
+
+    // If the same event ID comes in but with different stock (simulating a race condition or replay),
+    // it should be ignored by the deduplication logic.
+    mockLastEvent = {
+      event_type: 'INVENTORY_UPDATED',
+      message_id: 'evt-123', // SAME ID!
+      payload: { item_id: 1, new_stock: 3000, is_low_stock: false }
+    }
+    rerender(<InventoryDashboard />)
+
+    // It should STILL be 4000, not 3000
+    await waitFor(() => {
+      expect(screen.getByText('4000')).toBeInTheDocument()
+      expect(screen.queryByText('3000')).not.toBeInTheDocument()
+    })
+  })
+})
+import { render, screen, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import MapView from '@/pages/map/MapView'
+import { client } from '@/lib/api/client'
+import { MemoryRouter } from 'react-router-dom'
+
+// Mock API Client
+vi.mock('@/lib/api/client', () => ({
+  client: {
+    get: vi.fn(),
+  },
+}))
+
+// Mock react-leaflet because it requires a real DOM with layout for the map to render
+vi.mock('react-leaflet', () => {
+  return {
+    MapContainer: ({ children }: any) => <div data-testid="map-container">{children}</div>,
+    TileLayer: () => <div data-testid="tile-layer" />,
+    Marker: ({ position, children }: any) => <div data-testid="marker">{children}</div>,
+    Popup: ({ children }: any) => <div data-testid="popup">{children}</div>,
+    Polygon: ({ pathOptions }: any) => <div data-testid="polygon" data-color={pathOptions?.color}></div>,
+  }
+})
+
+describe('MapView Component Integration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('renders region risk data correctly with mapped risk colors (Regression Test for Step 1)', async () => {
+    // Mock the regions
+    vi.mocked(client.get).mockImplementation(async (url) => {
+      if (url === '/regions/') {
+        return {
+          data: [
+            { id: 1, name: 'Region A', lat: 0, lon: 0, polygon_coordinates: '[[0,0]]' },
+            { id: 2, name: 'Region B', lat: 1, lon: 1, polygon_coordinates: '[[1,1]]' },
+            { id: 3, name: 'Region C', lat: 2, lon: 2, polygon_coordinates: '[[2,2]]' },
+            { id: 4, name: 'Region D', lat: 3, lon: 3, polygon_coordinates: '[[3,3]]' },
+          ],
+        }
+      }
+      if (url === '/risk/current') {
+        // EXACT shape from backend (Array of risk objects, not nested under "data" property)
+        return {
+          data: [
+            { region_id: 1, overall_risk_score: 85, risk_level: 'CRITICAL', confidence: 0.9 },
+            { region_id: 2, overall_risk_score: 65, risk_level: 'HIGH', confidence: 0.8 },
+            { region_id: 3, overall_risk_score: 45, risk_level: 'MODERATE', confidence: 0.7 },
+            { region_id: 4, overall_risk_score: 20, risk_level: 'SAFE', confidence: 0.9 },
+          ]
+        } // Wait, Axios wraps response in { data: ... }
+      }
+      return { data: [] }
+    })
+
+    render(
+      <MemoryRouter>
+        <MapView />
+      </MemoryRouter>
+    )
+
+    // Wait for markers and polygons to render
+    await waitFor(() => {
+      expect(screen.getAllByTestId('polygon').length).toBe(4)
+    })
+
+    // Check color mappings
+    // 85 -> #ef4444 (Critical)
+    // 65 -> #f97316 (High)
+    // 45 -> #eab308 (Moderate)
+    // 20 -> #22c55e (Safe)
+    const polygons = screen.getAllByTestId('polygon')
+    const colors = polygons.map(p => p.getAttribute('data-color'))
+    
+    expect(colors).toContain('#ef4444')
+    expect(colors).toContain('#f97316')
+    expect(colors).toContain('#eab308')
+    expect(colors).toContain('#22c55e')
+  })
+
+  it('safely handles missing risk data', async () => {
+    vi.mocked(client.get).mockImplementation(async (url) => {
+      if (url === '/regions/') {
+        return { data: [{ id: 1, name: 'Region Missing', lat: 0, lon: 0, polygon_coordinates: '[[0,0]]' }] }
+      }
+      if (url === '/risk/current') {
+        return { data: [] } // Empty array (no risk data)
+      }
+      return { data: [] }
+    })
+
+    render(
+      <MemoryRouter>
+        <MapView />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('polygon').length).toBe(1)
+    })
+
+    const polygon = screen.getByTestId('polygon')
+    // Missing should fallback to SAFE (#22c55e)
+    expect(polygon.getAttribute('data-color')).toBe('#22c55e')
+  })
+})
+import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { PermissionGate } from '@/components/auth/PermissionGate'
+import { ProtectedRoute } from '@/components/auth/ProtectedRoute'
+import * as AuthContextModule from '@/lib/auth/AuthContext'
+import { Permission } from '@/lib/auth/permissions'
+
+// Mock the auth context hook
+vi.mock('@/lib/auth/AuthContext', () => ({
+  useAuth: vi.fn(),
+}))
+
+describe('RBAC UI Integration (PermissionGate)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('renders content when user has required permission (Administrator)', () => {
+    vi.mocked(AuthContextModule.useAuth).mockReturnValue({
+      user: { id: 1, role: 'Administrator', permissions: [Permission.MANAGE_USERS], username: 'admin' },
+      hasPermission: (p) => p === Permission.MANAGE_USERS,
+      isAuthenticated: true,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+    })
+
+    render(
+      <PermissionGate permission={Permission.MANAGE_USERS}>
+        <div data-testid="protected-content">Admin Settings</div>
+      </PermissionGate>
+    )
+
+    expect(screen.getByTestId('protected-content')).toBeInTheDocument()
+  })
+
+  it('hides content when user lacks required permission (Field Officer)', () => {
+    vi.mocked(AuthContextModule.useAuth).mockReturnValue({
+      user: { id: 2, role: 'Field Officer', permissions: [Permission.VIEW_RISK], username: 'officer' },
+      hasPermission: (p) => p === Permission.VIEW_RISK, // doesn't have MANAGE_USERS
+      isAuthenticated: true,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+    })
+
+    render(
+      <PermissionGate permission={Permission.MANAGE_USERS}>
+        <div data-testid="protected-content">Admin Settings</div>
+      </PermissionGate>
+    )
+
+    expect(screen.queryByTestId('protected-content')).not.toBeInTheDocument()
+  })
+})
+
+describe('RBAC UI Integration (ProtectedRoute)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('redirects to /login if unauthenticated', () => {
+    vi.mocked(AuthContextModule.useAuth).mockReturnValue({
+      user: null,
+      hasPermission: () => false,
+      isAuthenticated: false,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/dashboard']}>
+        <Routes>
+          <Route path="/login" element={<div data-testid="login-page">Login Page</div>} />
+          <Route 
+            path="/dashboard" 
+            element={<ProtectedRoute><div data-testid="dashboard">Dashboard</div></ProtectedRoute>} 
+          />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    expect(screen.getByTestId('login-page')).toBeInTheDocument()
+    expect(screen.queryByTestId('dashboard')).not.toBeInTheDocument()
+  })
+
+  it('renders route if authenticated', () => {
+    vi.mocked(AuthContextModule.useAuth).mockReturnValue({
+      user: { id: 1, role: 'Epidemiologist', permissions: [], username: 'epi' },
+      hasPermission: () => true,
+      isAuthenticated: true,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/dashboard']}>
+        <Routes>
+          <Route path="/login" element={<div data-testid="login-page">Login Page</div>} />
+          <Route 
+            path="/dashboard" 
+            element={<ProtectedRoute><div data-testid="dashboard">Dashboard</div></ProtectedRoute>} 
+          />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    expect(screen.getByTestId('dashboard')).toBeInTheDocument()
+    expect(screen.queryByTestId('login-page')).not.toBeInTheDocument()
+  })
+})
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import SIRForecast from '@/pages/forecasting/SIRForecast'
+import { client } from '@/lib/api/client'
+
+vi.mock('@/lib/api/client', () => ({
+  client: {
+    get: vi.fn(),
+    post: vi.fn(),
+  },
+}))
+
+// Mock Recharts
+vi.mock('recharts', () => ({
+  ResponsiveContainer: ({ children }: any) => <div data-testid="recharts-container">{children}</div>,
+  LineChart: ({ children }: any) => <div data-testid="line-chart">{children}</div>,
+  Line: () => <div data-testid="line" />,
+  XAxis: () => <div />,
+  YAxis: () => <div />,
+  CartesianGrid: () => <div />,
+  Tooltip: () => <div />,
+  Legend: () => <div />,
+}))
+
+describe('SIR Forecast Component', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(client.get).mockResolvedValue({
+      data: [
+        { id: 1, name: 'Region 1' },
+        { id: 2, name: 'Region 2' },
+      ]
+    })
+    vi.mocked(client.post).mockResolvedValue({
+      data: {
+        forecast: [
+          { day: 0, S: 1000, I: 10, R: 0 },
+          { day: 1, S: 990, I: 20, R: 0 },
+        ]
+      }
+    })
+  })
+
+  it('loads regions dynamically without hardcoded IDs', async () => {
+    render(<SIRForecast />)
+    
+    // Check that getRegions API was called
+    expect(client.get).toHaveBeenCalledWith('/regions/')
+
+    // Should render the fetched regions
+    await waitFor(() => {
+      expect(screen.getByText('Region 1')).toBeInTheDocument()
+      expect(screen.getByText('Region 2')).toBeInTheDocument()
+    })
+  })
+
+  it('calls forecast API when region is selected', async () => {
+    render(<SIRForecast />)
+    
+    await waitFor(() => {
+      expect(screen.getByText('Region 1')).toBeInTheDocument()
+    })
+
+    // It should automatically request forecast for the first region (id: 1)
+    await waitFor(() => {
+      expect(client.post).toHaveBeenCalledWith('/models/sir/forecast', expect.objectContaining({
+        region_id: 1,
+        days: 30
+      }))
+    })
+    
+    // Change region
+    const select = screen.getByRole('combobox')
+    await userEvent.selectOptions(select, '2')
+    
+    // Should request for region 2
+    expect(client.post).toHaveBeenCalledWith('/models/sir/forecast', expect.objectContaining({
+      region_id: 2
+    }))
+    
+    // Forecast chart should be rendered
+    expect(screen.getByTestId('line-chart')).toBeInTheDocument()
+  })
+})
