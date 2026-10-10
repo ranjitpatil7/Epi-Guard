@@ -1,6 +1,6 @@
 # EpiGuard AI
 
-**JalRakshak AI is a public-health decision-support and early-warning system, not a medical diagnosis system.**
+**EpiGuard AI is a public-health decision-support and early-warning system, not a medical diagnosis system.**
 
 ## Problem Statement
 Water-borne diseases significantly impact rural Northeast India, often resulting in delayed detection and response due to geographical and infrastructural challenges. 
