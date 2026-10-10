@@ -1,4 +1,4 @@
-# JalRakshak AI
+# EpiGuard AI
 
 **JalRakshak AI is a public-health decision-support and early-warning system, not a medical diagnosis system.**
 
